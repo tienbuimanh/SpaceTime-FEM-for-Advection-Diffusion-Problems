@@ -1,0 +1,140 @@
+load "msh3"
+
+real Xmin = 0;
+real Xmax = 1;
+real Tmin = 0;
+real Tmax = 1;
+
+int N;
+real h;
+
+// Number of nodes on the boundary: 2^i 
+int GridStart = 2;
+int GridEnd = 9;
+
+// Parameters
+real kappa = 0.1 * 1e-2;
+func A = kappa * exp(x^2 + y^2);
+func Ax = kappa * 2 * x * exp(x^2 + y^2);
+func B = 0.1 * x * y;
+func alpha = exp(x) * exp(y);
+func d = sin(pi * x) * cos(pi * y);
+
+real cA = kappa;
+real CB = 0;
+real Cd = 0;
+real lambda = 0;
+
+// Exact solution and it's derivatives
+func uExact = (sin(10*pi*(x-(0.4 + 0.05*sin(2*pi*y))) + pi/6) + sin(10*pi*(0.4 + 0.05*sin(2*pi*y)) - pi/6)) * sin(pi*y/2);
+func uExactX = 10*pi * cos(10*pi*(x-(0.4 + 0.05*sin(2*pi*y))) + pi/6) * sin(pi*y/2);
+func uExactT = 10*pi*(0.1*pi*cos(2*pi*y)) * (cos(10*pi*(0.4 + 0.05*sin(2*pi*y)) - pi/6) - cos(10*pi*(x-(0.4 + 0.05*sin(2*pi*y))) + pi/6)) * sin(pi*y/2)
+                + (pi/2) * (sin(10*pi*(x-(0.4 + 0.05*sin(2*pi*y))) + pi/6) + sin(10*pi*(0.4 + 0.05*sin(2*pi*y)) - pi/6)) * cos(pi*y/2);
+func uExactXX = -100*pi^2 * sin(10*pi*(x-(0.4 + 0.05*sin(2*pi*y))) + pi/6) * sin(pi*y/2); 
+
+// Source term
+func f = uExactT + d * uExact + B * uExactX - (A * uExactXX + Ax * uExactX);
+
+// Robin boundary condition
+func gLeft = - A * uExactX + alpha * uExact;
+func gRight = A * uExactX + alpha * uExact;
+
+// Initial condition
+func uExact0 = uExact(x, Tmin);
+
+// Find c_B, m_B, c_d
+mesh ThTemp = square(256, 256, [Xmin + (Xmax - Xmin) * x, Tmin + (Tmax - Tmin) * y]);
+fespace VhTemp(ThTemp, P1);
+VhTemp X = x, Y = y;
+real[int] xv = X[], yv = Y[];
+cout << "Number of nodes (nv) = " << ThTemp.nv << endl;
+
+bool findCB = CB <=0 ? true : false;
+bool findCD = Cd <=0 ? true : false;
+
+for (int i = 0; i < ThTemp.nv; i++) {
+    x = xv[i];
+    y = yv[i];
+    if (findCB) {
+        real tmp = abs(B);
+        if (tmp > CB) CB = tmp;
+    }
+    if (findCD) {
+        real tmp = abs(d);
+        if (tmp > Cd) Cd = tmp;
+    }
+}
+real mB = CB > 1 ? CB : 1;
+cout << "CB = " << CB << "\nmB = " << mB << "\nCd = " << Cd << endl;
+
+// find lambda
+if (lambda <= 0) {
+    lambda = Cd + (CB*mB)/cA + cA/2;
+}
+cout << "lambda = " << lambda << endl;
+func uLambda = exp(-lambda*y) * uExact; 
+func uLambdaX = exp(-lambda*y) * uExactX;
+func fLambda = exp(-lambda*y) * f;
+func gLeftLambda = exp(-lambda*y) * gLeft;
+func gRightLambda = exp(-lambda*y) * gRight;
+
+// solve problem and compute 
+ofstream fout("Ex1_kappa_1e-3_P2 RESULT.csv");
+fout << "N, h, L2 Error, L2 EOC, H1 Error, H1 EOC, H1 Error uLambda, H1 EOC uLambda" << endl;
+
+real hPrev;
+real errL2Prev;
+real errH1Prev;
+real errH1ULambdaPrev;
+
+for (int i = GridStart; i <= GridEnd; i++) {
+    N = 2^i;
+    mesh Th = square(N, N, [Xmin + (Xmax - Xmin) * x, Tmin + (Tmax - Tmin) * y]);
+    if (i == 3 || i == 5) {
+        string filename = "example1_mesh_" + 2^i + "elements.eps";
+        plot(Th, wait = false, ps = filename);
+    }
+    h = Th.hmax;
+
+    fespace Vh(Th, P2);
+
+    varf aPDE(u,v) = int2d(Th)( dy(u)*v + A*dx(u)*dx(v) + B*dx(u)*v + d*u*v + lambda *u*v )
+                    + int1d(Th, 2)( alpha*u*v ) // Neumann boundary condition on the right boundary
+                    + int1d(Th, 4)( alpha*u*v ) // Neumann boundary condition on the left boundary
+                    + int1d(Th, 1)( u*v );      // Initial condition
+
+    varf lPDE(u,v) = int2d(Th)(fLambda*v) + int1d(Th, 2)(gRightLambda*v) + int1d(Th, 4)(gLeftLambda*v)
+                    + int1d(Th,1)(uExact0*v);
+
+    matrix A = aPDE(Vh, Vh);
+    real[int] b = lPDE(0, Vh);
+
+    Vh uLambdaH;
+    set(A, solver = UMFPACK);
+    uLambdaH[] = A^-1 * b;
+
+    // Error and EOC computation
+    real errL2 = sqrt(int2d(Th)((exp(lambda * y) * uLambdaH - uExact)^2));
+    real errH1 = sqrt(int2d(Th)((exp(lambda * y) * uLambdaH - uExact)^2) + int2d(Th)((exp(lambda * y) * dx(uLambdaH) - uExactX)^2));
+    real eocL2 = 0;
+    real eocH1 = 0;
+    real eocH1ULambda = 0;
+
+    // Error between uLambdaH and uLambda
+    real errH1ULambda = sqrt(int2d(Th)((uLambdaH - uLambda)^2)
+                            + int2d(Th)((dx(uLambdaH) - uLambdaX)^2));
+
+    if (i > GridStart) {
+        eocL2 = log(errL2Prev / errL2) / log(hPrev / h);
+        eocH1 = log(errH1Prev / errH1) / log(hPrev / h);
+        eocH1ULambda = log(errH1ULambdaPrev / errH1ULambda) / log(hPrev / h);
+    }
+    
+    fout << N << ", " << h << ", " << errL2 << ", " << eocL2 << ", " << errH1 << ", " << eocH1
+         << ", " << errH1ULambda << ", " << eocH1ULambda << endl;
+    
+    hPrev = h;
+    errL2Prev = errL2;
+    errH1Prev = errH1;
+    errH1ULambdaPrev = errH1ULambda;
+}
