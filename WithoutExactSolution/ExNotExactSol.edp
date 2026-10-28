@@ -1,0 +1,433 @@
+load "msh3"
+
+
+// ============================================================
+// Domain
+// ============================================================
+
+real Xmin = 0;
+real Xmax = 1;
+
+real Tmin = 0;
+real Tmax = 1;
+
+
+// ============================================================
+// Grid parameters
+// ============================================================
+
+// Coarse meshes:
+// N = 4, 8, 16, 32, 64, 128, 256
+int GridStart = 2;
+int GridEnd   = 8;
+
+// Reference mesh
+// NRef = 2^9 = 512
+int GridRef = 9;
+
+
+// ============================================================
+// Parameters
+// ============================================================
+
+real kappa = 1;
+
+func A     = kappa * (x+y + 1);
+func Ax    = kappa;
+func B     = x*y;
+func alpha = x^2 + y^2;
+func d     = 1;
+
+real cA = kappa;
+real CB = 0;
+real Cd = 0;
+real lambda = 0;
+
+
+// ============================================================
+// Source term
+// ============================================================
+
+func f = x^2 * y;
+
+
+// ============================================================
+// Robin boundary condition
+// ============================================================
+func gRight = x^2 * y^2;
+
+// ============================================================
+// Initial condition
+
+func uExact0 = 0;
+
+
+// ============================================================
+// Output file
+// ============================================================
+
+ofstream fout("ExNotExactSol_P2 RESULT.csv");
+
+fout << "N, h, Relative L2 Error, L2 EOC, "
+     << "Relative H1 Error, H1 EOC"
+     << endl;
+
+
+// ============================================================
+// ============================================================
+// REFERENCE SOLUTION: N = 512
+// ============================================================
+// ============================================================
+
+int NRef = 2^GridRef;
+
+cout << endl;
+cout << "============================================" << endl;
+cout << " Computing reference solution" << endl;
+cout << " NRef = " << NRef << endl;
+cout << "============================================" << endl;
+
+
+// ------------------------------------------------------------
+// Reference mesh
+// ------------------------------------------------------------
+
+mesh ThRef = square(
+    NRef,
+    NRef,
+    [
+        Xmin + (Xmax - Xmin)*x,
+        Tmin + (Tmax - Tmin)*y
+    ]
+);
+
+// ------------------------------------------------------------
+// Find c_B, m_B, c_d and lambda using ThRef mesh
+// ------------------------------------------------------------
+
+fespace VhTemp(ThRef, P1); // always P1
+VhTemp X = x, Y = y;
+real[int] xv = X[], yv = Y[];
+cout << "Number of nodes (nv) = " << ThRef.nv << endl;
+
+bool findCB = CB <=0 ? true : false;
+bool findCD = Cd <=0 ? true : false;
+
+for (int i = 0; i < ThRef.nv; i++) {
+    x = xv[i];
+    y = yv[i];
+    if (findCB) {
+        real tmp = abs(B);
+        if (tmp > CB) CB = tmp;
+    }
+    if (findCD) {
+        real tmp = abs(d);
+        if (tmp > Cd) Cd = tmp;
+    }
+}
+real mB = CB > 1 ? CB : 1;
+cout << "CB = " << CB << "\nmB = " << mB << "\nCd = " << Cd << endl;
+
+// find lambda
+if (lambda <= 0) {
+    lambda = Cd + (CB*mB)/cA + cA/2;
+}
+cout << "lambda = " << lambda << endl;
+
+// Lambda-transformed functions
+func fLambda = exp(-lambda*y) * f;
+func gRightLambda = exp(-lambda*y) * gRight;
+func uExact0Lambda = uExact0;
+
+
+// ------------------------------------------------------------
+// Reference FE space
+// ------------------------------------------------------------
+
+fespace VhRef(ThRef, P2);
+
+
+// ------------------------------------------------------------
+// Reference PDE bilinear form
+// ------------------------------------------------------------
+
+varf aPDERef(u,v) = int2d(ThRef)(dy(u)*v + A*dx(u)*dx(v) + B*dx(u)*v+ d*u*v + lambda *u*v)
+                    + int1d(ThRef, 2)(alpha*u*v)
+                    + on(4, u = 0)
+                    + int1d(ThRef, 1)(u*v);
+
+// ------------------------------------------------------------
+// Reference PDE RHS
+// ------------------------------------------------------------
+
+varf lPDERef(u,v) = int2d(ThRef)(fLambda*v) + int1d(ThRef, 2)(gRightLambda*v)
+                    + int1d(ThRef, 1)(uExact0Lambda*v);
+
+matrix APDERef = aPDERef(VhRef, VhRef);
+
+real[int] bPDERef = lPDERef(0, VhRef);
+
+VhRef uLambdaRef;
+
+set(APDERef, solver = UMFPACK);
+
+uLambdaRef[] = APDERef^-1 * bPDERef;
+
+
+// ============================================================
+// Reference norms
+// ============================================================
+
+// ||u_ref||_L2
+real normL2Ref =
+    sqrt(
+        int2d(ThRef)(
+            (exp(lambda*y)*uLambdaRef)^2
+        )
+    );
+
+
+// ||(u_ref)||_Y
+real normH1Ref =
+    sqrt(
+        int2d(ThRef)(
+              (exp(lambda*y)*dx(uLambdaRef))^2 + (exp(lambda*y)*uLambdaRef)^2
+        )
+    );
+
+
+cout << "Reference solution completed." << endl;
+
+cout << "||uRef||_L2     = "
+     << normL2Ref
+     << endl;
+
+cout << "||uRef||_Y     = "
+     << normH1Ref
+     << endl;
+
+cout << endl;
+
+
+// ============================================================
+// ============================================================
+// COARSE GRID LOOP
+// ============================================================
+// ============================================================
+
+real hPrev = 0;
+
+real errL2Prev = 0;
+
+real errH1Prev = 0;
+
+
+for (int i = GridStart; i <= GridEnd; i++)
+{
+
+    int N = 2^i;
+
+
+    cout << "--------------------------------------------" << endl;
+    cout << "Solving N = " << N << endl;
+
+
+    // ========================================================
+    // Mesh
+    // ========================================================
+
+    mesh Th = square(
+        N,
+        N,
+        [
+            Xmin + (Xmax - Xmin)*x,
+            Tmin + (Tmax - Tmin)*y
+        ]
+    );
+
+    real h = Th.hmax;
+
+
+    // ========================================================
+    // FE space
+    // ========================================================
+
+    fespace Vh(Th, P2);
+
+
+    // ========================================================
+    // PDE bilinear form
+    // ========================================================
+
+    varf aPDE(u,v) =
+        int2d(Th)(
+              dy(u)*v
+            + A*dx(u)*dx(v)
+            + B*dx(u)*v
+            + d*u*v
+            + lambda *u*v
+        )
+        + int1d(Th, 2)(
+            alpha*u*v
+        )
+        + on(4, u = 0)
+        + int1d(Th, 1)(
+            u*v
+        );
+    // ========================================================
+    // PDE RHS
+    // ========================================================
+
+    varf lPDE(u,v) =
+        int2d(Th)(
+            fLambda*v
+        )
+        + int1d(Th, 2)(
+            gRightLambda*v
+        )
+        + int1d(Th, 1)(
+            uExact0Lambda*v
+        );
+    // ========================================================
+    // Assemble
+    // ========================================================
+
+    matrix APDE = aPDE(Vh, Vh);
+    real[int] LPDE = lPDE(0, Vh);
+
+    // ========================================================
+    // Solve
+    // ========================================================
+
+    Vh uLambdaH;
+
+    set(APDE, solver = UMFPACK);
+
+    uLambdaH[] = APDE^-1 * LPDE;
+
+
+    // ========================================================
+    // L2 ERROR
+    //
+    // ||uh - uRef||_L2(Q)
+    // ========================================================
+
+// ========================================================
+// Interpolate coarse solution to reference mesh
+// ========================================================
+
+VhRef uLambdaHRef;
+
+uLambdaHRef = uLambdaH;
+
+
+// ========================================================
+// L2 ERROR
+// ========================================================
+
+real errL2 =
+    sqrt(
+        int2d(ThRef)(
+            (exp(lambda*y)*uLambdaHRef - exp(lambda*y)*uLambdaRef)^2
+        )
+    );
+
+
+// ========================================================
+// Spatial H1 SEMINORM ERROR
+// ========================================================
+
+real errH1 =
+    sqrt(
+        int2d(ThRef)(
+            (exp(lambda*y)*(uLambdaHRef - uLambdaRef))^2
+            + (exp(lambda*y)*(dx(uLambdaHRef) - dx(uLambdaRef)))^2
+        )
+    );
+    // ========================================================
+    // RELATIVE ERRORS
+    // ========================================================
+
+    real relErrL2 =
+        errL2 / normL2Ref;
+
+
+    real relErrH1 =
+        errH1 / normH1Ref;
+
+
+    // ========================================================
+    // EOC
+    // ========================================================
+
+    real eocL2 = 0;
+
+    real eocH1 = 0;
+
+
+    if (i > GridStart)
+    {
+
+        eocL2 =
+            log(errL2Prev / errL2)
+            / log(hPrev / h);
+
+
+        eocH1 =
+            log(errH1Prev / errH1)
+            / log(hPrev / h);
+    }
+
+
+    // ========================================================
+    // Save result
+    // ========================================================
+
+    fout
+        << N << ", "
+        << h << ", "
+        << relErrL2 << ", "
+        << eocL2 << ", "
+        << relErrH1 << ", "
+        << eocH1
+        << endl;
+
+
+    // ========================================================
+    // Print result
+    // ========================================================
+
+    cout
+        << "N          = " << N << endl;
+
+    cout
+        << "h          = " << h << endl;
+
+    cout
+        << "L2 Error   = " << relErrL2 << endl;
+
+    cout
+        << "H1 Error   = " << relErrH1 << endl;
+
+    cout
+        << "H1 EOC     = " << eocH1 << endl;
+
+
+    // ========================================================
+    // Update previous values
+    // ========================================================
+
+    hPrev = h;
+
+    errL2Prev = errL2;
+
+    errH1Prev = errH1;
+}
+
+
+cout << endl;
+cout << "============================================" << endl;
+cout << "Finished." << endl;
+cout << "Results saved to Ex_not_exact_solution_P2_RESULT.csv" << endl;
+cout << "Reference mesh: N = 512" << endl;
+cout << "============================================" << endl;
