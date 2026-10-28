@@ -1,0 +1,132 @@
+load "msh3"
+
+real Xmin = 0;
+real Xmax = 1;
+real Tmin = 0;
+real Tmax = 1;
+
+int N;
+real h;
+
+// Number of nodes on the boundary: 2^i 
+int GridStart = 2;
+int GridEnd = 9;
+
+// Parameters
+real kappa = 1;
+func A = 1;
+func Ax = 0;
+func B = x * y;
+func alpha = 1;
+func d = 1;
+
+real cA = kappa;
+real CB = 0;
+real Cd = 0;
+real lambda = 0;
+
+// Exact solution and it's derivatives
+real gamma = 1.7;
+func uExact = (x^gamma - x^(gamma + 1.)) * y^2;
+func uExactX = gamma * x^(gamma - 1.) * y^2 - (gamma + 1.) * x^gamma * y^2;
+func uExactT = 2 * (x^gamma - x^(gamma + 1.)) * y; //deravitive of y
+func uExactXX = gamma * (gamma - 1.) * x^(gamma - 2.) * y^2 - (gamma + 1.) * gamma * x^(gamma - 1.) * y^2;
+
+// Source term
+func f = uExactT + d * uExact + B * uExactX - (A * uExactXX + Ax * uExactX);
+
+// Robin boundary condition
+func gLeft = - A * uExactX + alpha * uExact;
+func gRight = A * uExactX + alpha * uExact;
+
+// Initial condition
+func uExact0 = uExact(x, Tmin);
+
+// Find c_B, m_B, c_d
+mesh ThTemp = square(256, 256, [Xmin + (Xmax - Xmin) * x, Tmin + (Tmax - Tmin) * y]);
+fespace VhTemp(ThTemp, P1); // it's always P1 
+VhTemp X = x, Y = y;
+real[int] xv = X[], yv = Y[];
+cout << "Number of nodes (nv) = " << ThTemp.nv << endl;
+
+bool findCB = CB <=0 ? true : false;
+bool findCD = Cd <=0 ? true : false;
+
+for (int i = 0; i < ThTemp.nv; i++) {
+    x = xv[i];
+    y = yv[i];
+    if (findCB) {
+        real tmp = abs(B);
+        if (tmp > CB) CB = tmp;
+    }
+    if (findCD) {
+        real tmp = abs(d);
+        if (tmp > Cd) Cd = tmp;
+    }
+}
+real mB = CB > 1 ? CB : 1;
+cout << "CB = " << CB << "\nmB = " << mB << "\nCd = " << Cd << endl;
+
+// find lambda
+if (lambda <= 0) {
+    lambda = Cd + (CB*mB)/cA + cA/2;
+}
+cout << "lambda = " << lambda << endl;
+func uLambda = exp(-lambda*y) * uExact; 
+func fLambda = exp(-lambda*y) * f;
+func gLeftLambda = exp(-lambda*y) * gLeft;
+func gRightLambda = exp(-lambda*y) * gRight;
+
+// solve problem and compute 
+ofstream fout("LimitedRegularity_P1_RESULT.csv");
+fout << "N, h, L2 Error, L2 EOC, H1 Error, H1 EOC" << endl;
+
+real hPrev;
+real errL2Prev;
+real errH1Prev;
+
+for (int i = GridStart; i <= GridEnd; i++) {
+    N = 2^i;
+    mesh Th = square(N, N, [Xmin + (Xmax - Xmin) * x, Tmin + (Tmax - Tmin) * y]);
+    /*
+    if (i == 3 || i == 5) {
+        string filename = "example1_mesh_" + 2^i + "elements.eps";
+        plot(Th, wait = false, ps = filename);
+    }
+    */
+    h = Th.hmax;
+
+    fespace Vh(Th, P1);
+
+    varf aPDE(u,v) = int2d(Th)( dy(u)*v + A*dx(u)*dx(v) + B*dx(u)*v + d*u*v + lambda *u*v )
+                    + int1d(Th, 2)( alpha*u*v )
+                    + on(4, u=0)
+                    + int1d(Th, 1)( u*v ); 
+
+    varf lPDE(u,v) = int2d(Th)(fLambda*v) + int1d(Th, 2)(gRightLambda*v)
+                    + int1d(Th,1)(uExact0*v);
+
+    matrix A = aPDE(Vh, Vh);
+    real[int] b = lPDE(0, Vh);
+
+    Vh uLambdaH;
+    set(A, solver = UMFPACK);
+    uLambdaH[] = A^-1 * b;
+
+    // Error and eoc
+    real errL2 = sqrt(int2d(Th)((exp(lambda * y) * uLambdaH - uExact)^2));
+    real errH1 = sqrt(int2d(Th)((exp(lambda * y) * uLambdaH - uExact)^2) + int2d(Th)((exp(lambda * y) * dx(uLambdaH) - uExactX)^2));
+    real eocL2 = 0;
+    real eocH1 = 0;
+    
+    if (i > GridStart) {
+        eocL2 = log(errL2Prev / errL2) / log(hPrev / h);
+        eocH1 = log(errH1Prev / errH1) / log(hPrev / h);
+    }
+    
+    fout << N << ", " << h << ", " << errL2 << ", " << eocL2 << ", " << errH1 << ", " << eocH1 << endl;
+    
+    hPrev = h;
+    errL2Prev = errL2;
+    errH1Prev = errH1;
+}
