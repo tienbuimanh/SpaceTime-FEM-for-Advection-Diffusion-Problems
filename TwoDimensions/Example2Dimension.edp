@@ -1,0 +1,240 @@
+load "msh3"
+load "mmg"
+
+// ==========================================
+// Geometry parameters
+// ==========================================
+
+// 1. Elipse's parameters (a, b) for the outer boundary
+real aOut = 1.0; 
+real bOut = 1.25; 
+
+// 2. Triangle's parameters (Lx, Ly) for the inner hole
+real Lx = 0.6;
+real Ly = 1.0;
+
+// 3. Time
+real Tmin = 0;
+real Tmax = 1;
+
+// ==========================================
+// BORDERS
+// ==========================================
+// 1. Elipse bound
+// Label = 1
+border OuterEllipse(t=0, 2*pi) { x = aOut*cos(t); y = bOut*sin(t); label = 1; }
+
+// 2. Triangle bound
+border LegX(t=Lx, 0) { x = t; y = 0; label = 5; } // unit vector (0, 1)
+border LegY(t=0, Ly) { x = 0; y = t; label = 6; } // unit vector (1, 0)
+border Hypotenuse(t=0, 1) { x = Lx*t; y = Ly - Ly*t; label = 7; }
+
+// unit vector for Hypotenuse: n = (-Ly, -Lx)/sqrt(Lx^2 + Ly^2)
+real nX = -Ly/sqrt(Lx^2 + Ly^2);
+real nY = -Lx/sqrt(Lx^2 + Ly^2);
+
+// Unit vector for elipse bound (Label 1)
+// ==========================================
+func nxEllip = (bOut^2 * x) / sqrt(bOut^4 * x^2 + aOut^4 * y^2);
+func nyEllip = (aOut^2 * y) / sqrt(bOut^4 * x^2 + aOut^4 * y^2);
+
+// ==========================================
+// MESH & EQUATION
+// ==========================================
+int N;
+real h;
+
+int GridStart = 1;
+int GridEnd = 6;
+int numNode = 18;
+real growthRate = 1.5;
+
+// PDE parameters
+func A11 = 1; func A12 = 0; func A21 = 0; func A22 = 1;
+func A11X = 0; func A12X = 0; func A21Y = 0; func A22Y = 0;
+
+func B1 = x*y*z;
+func B2 = (x^2 + y^2)*z;
+func alpha = x^2+y^2+z;
+func d = 1;
+
+real cA = 1;
+real CB = 0;
+real Cd = 1;
+real lambda = 0;
+
+// ==========================================
+// EXACT SOLUTION AND ITS DERIVATIVES
+// ==========================================
+func uExact = x^2 * (y^2 + z^2);
+func uExactX = 2.0*x * (y^2 + z^2);
+func uExactY = 2.0*y * x^2;
+func uExactT = 2.0*z * x^2;
+func uExactXX = 2.0 * (y^2 + z^2);
+func uExactXY = 4.0*x*y;
+func uExactYY = 2.0*x^2;
+
+// Source term
+func f = uExactT + d * uExact + (B1 * uExactX + B2 * uExactY)
+         - (A11 * uExactXX + (A12 + A21) * uExactXY + A22 * uExactYY
+            + (A11X + A21Y) * uExactX + (A12X + A22Y) * uExactY);
+
+// ==========================================
+// ROBIN BOUNDARY CONDITIONS (g = alpha*u + A*grad(u)*n)
+// ==========================================
+func gLegX = alpha * uExact + (A21 * uExactX + A22 * uExactY); // n = (0, 1)
+func gLegY = alpha * uExact + (A11 * uExactX + A12 * uExactY); // n = (1, 0)
+func gHypotenuse = alpha * uExact 
+                 + (A11 * uExactX + A12 * uExactY) * nX 
+                 + (A21 * uExactX + A22 * uExactY) * nY;
+func gEllip = alpha * uExact
+            + (A11 * uExactX + A12 * uExactY) * nxEllip
+            + (A21 * uExactX + A22 * uExactY) * nyEllip;
+
+// Initial condition
+func uExact0 = uExact(x, y, Tmin);
+
+// Find c_B, m_B, c_d
+bool findCB = CB <=0 ? true : false;
+bool findCD = Cd <=0 ? true : false;
+
+if (findCB || findCD) {
+    mesh Th2Temp = buildmesh(OuterEllipse(64) + LegX(32) + LegY(32) + Hypotenuse(32));
+    mesh3 ThTemp = buildlayers(Th2Temp, 16, zbound=[Tmin, Tmax]);
+    fespace VhTemp(ThTemp, P1);
+    VhTemp X = x, Y = y, Z = z;
+    real[int] xv = X[], yv = Y[], zv = Z[];
+    for (int i = 0; i < ThTemp.nv; i++) {
+        x = xv[i]; y = yv[i]; z = zv[i];
+        if (findCB) {
+            real tmp = sqrt(B1^2 + B2^2);
+            if (tmp > CB) CB = tmp;
+        }
+        if (findCD) {
+            real tmp = abs(d);
+            if (tmp > Cd) Cd = tmp;
+        }
+    }
+}
+real mB = CB > 1 ? CB : 1;
+cout << "CB = " << CB << "\nmB = " << mB << "\nCd = " << Cd << endl;
+
+// find lambda
+if (lambda <= 0) {
+    lambda = Cd + (CB*mB)/cA + cA/2;
+}
+cout << "lambda = " << lambda << endl;
+
+func uLambdaExact = exp(-lambda*z) * uExact;
+func fLambda = exp(-lambda*z) * f;
+func gLegXLambda = exp(-lambda*z) * gLegX;
+func gLegYLambda = exp(-lambda*z) * gLegY;
+func gHypotenuseLambda = exp(-lambda*z) * gHypotenuse;
+func gEllipLambda = exp(-lambda*z) * gEllip;
+
+// solve problem and compute errors
+ofstream fout("Example2Dimension_P2_RESULT.csv");
+fout << "N, Num Elements, Ndof, h, L2 Error, L2 EOC, H1 Error, H1 EOC" << endl;
+
+real hPrev;
+real errL2Prev;
+real errH1Prev;
+
+for (int i = GridStart; i <= GridEnd; i++) {
+    cout <<"==========================" << endl;
+    cout <<"i = " << i << endl;
+    N = int(numNode * (growthRate^(i-1))); 
+    
+    // ---------------------------------------------------------
+    // STEP TO COMPUTE hTarget BASED ON ACTUAL BOUNDARY LENGTH
+    // ---------------------------------------------------------
+    // Approximate perimeter of Ellipse (simplified Ramanujan formula)
+    real lenOuter = 2.0 * pi * sqrt((aOut^2 + bOut^2) / 2.0); 
+    real lenLegX  = Lx;
+    real lenLegY  = Ly;
+    real lenHypo  = sqrt(Lx^2 + Ly^2);
+    real lenTime  = Tmax - Tmin;
+
+    // Find hTarget size by taking max of (Length / N)
+    real hTarget = max(lenOuter/N, max(lenLegX/N, max(lenLegY/N, lenHypo/N)));
+
+    // Recompute number of division points on EACH BOUNDARY
+    int nOuter = max(2, int(lenOuter / hTarget));
+    int nLegX  = max(2, int(lenLegX / hTarget));
+    int nLegY  = max(2, int(lenLegY / hTarget));
+    int nHypo  = max(2, int(lenHypo / hTarget));
+    int numNodeTime = max(2, int(lenTime / hTarget));
+    // ---------------------------------------------------------
+    
+    // Initialize 2D base mesh
+    mesh Th2 = buildmesh(OuterEllipse(nOuter) + LegX(nLegX) + LegY(nLegY) + Hypotenuse(nHypo));
+                       
+    // Label of boundary faces (Ellipse=1, Triangle=5,6,7)
+    int[int] rup = [0, 11];
+    int[int] rdown = [0, 10];
+    int[int] rmid = [1,1, 5,5, 6,6, 7,7];
+    
+    // Build 3D layered mesh
+    mesh3 ThLayered = buildlayers(Th2, numNodeTime, zbound=[Tmin, Tmax], 
+                                  reffacemid=rmid, reffaceup=rup, reffacelow=rdown);
+    
+    // Call MMG3D to create completely unstructured mesh.
+    mesh3 Th = mmg3d(ThLayered, hmax=hTarget, hmin=hTarget*0.95, hausd = hTarget);
+
+    if (i == 2) {
+        plot(Th, wait = true, cmm="MMG3D Outer Ellipse Mesh");
+        cout << "number of elements = " << Th.nt << endl;
+    }
+    h = Th.hmax;
+
+    fespace Vh(Th, P2);
+    int Ndof = Vh.ndof;
+    cout << "Ndof = " << Ndof << ", hmax = " << h << endl;
+
+    varf aPDE(u,v) = int3d(Th)(dz(u)*v + (A11*dx(u) + A12*dy(u)) * dx(v) + (A21*dx(u) + A22*dy(u)) * dy(v)
+                                + (B1*dx(u) + B2*dy(u)) * v + d*u*v + lambda*u*v)
+                    + int2d(Th, 5, 6, 7)(alpha*u*v) // Robin on Triangle
+                    + int2d(Th, 1)(alpha*u*v)                 // Robin on Ellipse
+                    + int2d(Th, 10)(u*v);
+
+    varf lPDE(u,v) = int3d(Th)(fLambda*v)
+                    + int2d(Th, 5)(gLegXLambda * v)
+                    + int2d(Th, 6)(gLegYLambda * v)
+                    + int2d(Th, 7)(gHypotenuseLambda * v)
+                    + int2d(Th, 1)(gEllipLambda * v) 
+                    + int2d(Th, 10)(uExact0*v); 
+
+    matrix A = aPDE(Vh, Vh);
+    real[int] b = lPDE(0, Vh);
+
+    Vh uLambdaH;
+if (i > 6)    {set(A, solver = GMRES, eps = 1e-5); 
+}
+else {
+    set(A, solver = UMFPACK);
+}
+    uLambdaH[] = A^-1 * b;
+
+    // Error and compute EOC
+    real errL2 = sqrt(int3d(Th)((exp(lambda*z)*uLambdaH - uExact)^2));
+    real errH1 = sqrt(int3d(Th)((exp(lambda*z)*uLambdaH - uExact)^2) 
+                        + int3d(Th)((exp(lambda*z)*dx(uLambdaH) - uExactX)^2 
+                                    + (exp(lambda*z)*dy(uLambdaH) - uExactY)^2));
+    
+    real eocL2 = 0, eocH1 = 0;
+    
+    if (i > GridStart) {
+        eocL2 = log(errL2Prev / errL2) / log(hPrev / h);
+        eocH1 = log(errH1Prev / errH1) / log(hPrev / h);
+    }
+    
+    fout << N << ", " << Th.nt << ", " << Ndof << ", " << h << ", " 
+         << errL2 << ", " << eocL2 << ", " 
+         << errH1 << ", " << eocH1 << endl;
+         
+    cout << "errH1 = " << errH1 << " | EOC(h) = " << eocH1 << endl;
+    
+    hPrev = h;
+    errL2Prev = errL2;
+    errH1Prev = errH1;
+}
