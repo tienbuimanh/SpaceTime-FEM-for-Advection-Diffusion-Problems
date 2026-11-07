@@ -69,7 +69,8 @@ func uExact0 = 0;
 ofstream fout("ExNotExactSol_P2 RESULT.csv");
 
 fout << "N, h, Relative L2 Error, L2 EOC, "
-     << "Relative H1 Error, H1 EOC"
+     << "Relative H1 Error, H1 EOC, "
+     << "H1 error uLambda, H1 EOC uLambda"
      << endl;
 
 
@@ -221,6 +222,8 @@ real errL2Prev = 0;
 
 real errH1Prev = 0;
 
+real errH1NoExpPrev = 0;
+
 
 for (int i = GridStart; i <= GridEnd; i++)
 {
@@ -344,6 +347,15 @@ real errH1 =
             + (exp(lambda*y)*(dx(uLambdaHRef) - dx(uLambdaRef)))^2
         )
     );
+
+    // H1 error uLambda (without exp(lambda*y))
+    real errH1NoExp =
+    sqrt(
+        int2d(ThRef)(
+            (uLambdaHRef - uLambdaRef)^2
+            + (dx(uLambdaHRef) - dx(uLambdaRef))^2
+        )
+    );
     // ========================================================
     // RELATIVE ERRORS
     // ========================================================
@@ -355,6 +367,9 @@ real errH1 =
     real relErrH1 =
         errH1 / normH1Ref;
 
+    real relErrH1NoExp =
+        errH1NoExp / normH1Ref;
+
 
     // ========================================================
     // EOC
@@ -363,6 +378,8 @@ real errH1 =
     real eocL2 = 0;
 
     real eocH1 = 0;
+
+    real eocH1NoExp = 0;
 
 
     if (i > GridStart)
@@ -375,6 +392,10 @@ real errH1 =
 
         eocH1 =
             log(errH1Prev / errH1)
+            / log(hPrev / h);
+
+        eocH1NoExp =
+            log(errH1NoExpPrev / errH1NoExp)
             / log(hPrev / h);
     }
 
@@ -389,7 +410,9 @@ real errH1 =
         << relErrL2 << ", "
         << eocL2 << ", "
         << relErrH1 << ", "
-        << eocH1
+        << eocH1 << ", "
+        << relErrH1NoExp << ", "
+        << eocH1NoExp
         << endl;
 
 
@@ -422,6 +445,8 @@ real errH1 =
     errL2Prev = errL2;
 
     errH1Prev = errH1;
+
+    errH1NoExpPrev = errH1NoExp;
 }
 
 

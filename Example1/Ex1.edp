@@ -13,7 +13,7 @@ int GridStart = 2;
 int GridEnd = 9;
 
 // Parameters
-real kappa = 0.1 * 1e-2;
+real kappa = 1e-3;
 func A = kappa * exp(x^2 + y^2);
 func Ax = kappa * 2 * x * exp(x^2 + y^2);
 func B = 0.1 * x * y;

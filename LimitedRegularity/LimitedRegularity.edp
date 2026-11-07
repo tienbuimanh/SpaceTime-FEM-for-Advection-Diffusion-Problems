@@ -73,17 +73,19 @@ if (lambda <= 0) {
 }
 cout << "lambda = " << lambda << endl;
 func uLambda = exp(-lambda*y) * uExact; 
+func uLambdaX = exp(-lambda*y) * uExactX;
 func fLambda = exp(-lambda*y) * f;
 func gLeftLambda = exp(-lambda*y) * gLeft;
 func gRightLambda = exp(-lambda*y) * gRight;
 
 // solve problem and compute 
-ofstream fout("LimitedRegularity_P1_RESULT.csv");
-fout << "N, h, L2 Error, L2 EOC, H1 Error, H1 EOC" << endl;
+ofstream fout("LimitedRegularity_P2_RESULT.csv");
+fout << "N, h, L2 Error, L2 EOC, H1 Error, H1 EOC, H1 Error uLambda, H1 EOC uLambda" << endl;
 
 real hPrev;
 real errL2Prev;
 real errH1Prev;
+real errH1ULambdaPrev;
 
 for (int i = GridStart; i <= GridEnd; i++) {
     N = 2^i;
@@ -96,7 +98,7 @@ for (int i = GridStart; i <= GridEnd; i++) {
     */
     h = Th.hmax;
 
-    fespace Vh(Th, P1);
+    fespace Vh(Th, P2);
 
     varf aPDE(u,v) = int2d(Th)( dy(u)*v + A*dx(u)*dx(v) + B*dx(u)*v + d*u*v + lambda *u*v )
                     + int1d(Th, 2)( alpha*u*v )
@@ -116,17 +118,23 @@ for (int i = GridStart; i <= GridEnd; i++) {
     // Error and eoc
     real errL2 = sqrt(int2d(Th)((exp(lambda * y) * uLambdaH - uExact)^2));
     real errH1 = sqrt(int2d(Th)((exp(lambda * y) * uLambdaH - uExact)^2) + int2d(Th)((exp(lambda * y) * dx(uLambdaH) - uExactX)^2));
+    real errH1ULambda = sqrt(int2d(Th)((uLambdaH - uLambda)^2)
+                            + int2d(Th)((dx(uLambdaH) - uLambdaX)^2));
     real eocL2 = 0;
     real eocH1 = 0;
+    real eocH1ULambda = 0;
     
     if (i > GridStart) {
         eocL2 = log(errL2Prev / errL2) / log(hPrev / h);
         eocH1 = log(errH1Prev / errH1) / log(hPrev / h);
+        eocH1ULambda = log(errH1ULambdaPrev / errH1ULambda) / log(hPrev / h);
     }
     
-    fout << N << ", " << h << ", " << errL2 << ", " << eocL2 << ", " << errH1 << ", " << eocH1 << endl;
+    fout << N << ", " << h << ", " << errL2 << ", " << eocL2 << ", " << errH1 << ", " << eocH1
+         << ", " << errH1ULambda << ", " << eocH1ULambda << endl;
     
     hPrev = h;
     errL2Prev = errL2;
     errH1Prev = errH1;
+    errH1ULambdaPrev = errH1ULambda;
 }
