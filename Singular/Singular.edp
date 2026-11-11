@@ -80,8 +80,8 @@ func gRightLambda = exp(-lambda*y) * gRight;
 
 // solve problem and compute 
 
-ofstream fout("Singular_P2_RESULT.csv");
-fout << "N, h, L2 Error, L2 EOC, H1 Error, H1 EOC, H1 Error uLambda, H1 EOC uLambda" << endl;
+ofstream fout("Singular_P1_RESULT.csv");
+fout << "N, Ndof, h, L2 Error, L2 EOC, H1 Error, H1 EOC, H1 Error uLambda, H1 EOC uLambda" << endl;
 
 real hPrev;
 real errL2Prev;
@@ -99,7 +99,9 @@ for (int i = GridStart; i <= GridEnd; i++) {
     */
     h = Th.hmax;
 
-    fespace Vh(Th, P2);
+    fespace Vh(Th, P1);
+    int Ndof = Vh.ndof;
+    cout << "Ndof = " << Ndof << ", hmax = " << h << endl;
 
     varf aPDE(u,v) = int2d(Th)( dy(u)*v + A*dx(u)*dx(v) + B*dx(u)*v + d*u*v + lambda *u*v )
                     + int1d(Th, 2)( alpha*u*v )
@@ -131,7 +133,7 @@ for (int i = GridStart; i <= GridEnd; i++) {
         eocH1ULambda = log(errH1ULambdaPrev / errH1ULambda) / log(hPrev / h);
     }
     
-    fout << N << ", " << h << ", " << errL2 << ", " << eocL2 << ", " << errH1 << ", " << eocH1
+    fout << N << ", " << Ndof << ", " << h << ", " << errL2 << ", " << eocL2 << ", " << errH1 << ", " << eocH1
          << ", " << errH1ULambda << ", " << eocH1ULambda << endl;
     
     hPrev = h;

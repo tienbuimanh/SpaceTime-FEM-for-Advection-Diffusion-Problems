@@ -68,7 +68,7 @@ func uExact0 = 0;
 
 ofstream fout("ExNotExactSol_P2 RESULT.csv");
 
-fout << "N, h, Relative L2 Error, L2 EOC, "
+fout << "N, Ndof, h, Relative L2 Error, L2 EOC, "
      << "Relative H1 Error, H1 EOC, "
      << "H1 error uLambda, H1 EOC uLambda"
      << endl;
@@ -256,6 +256,8 @@ for (int i = GridStart; i <= GridEnd; i++)
     // ========================================================
 
     fespace Vh(Th, P2);
+    int Ndof = Vh.ndof;
+    cout << "Ndof = " << Ndof << ", hmax = " << h << endl;
 
 
     // ========================================================
@@ -406,6 +408,7 @@ real errH1 =
 
     fout
         << N << ", "
+        << Ndof << ", "
         << h << ", "
         << relErrL2 << ", "
         << eocL2 << ", "
